@@ -1,0 +1,2 @@
+# Embedding-JMP-2.0
+Credit goes to Meijian Guan for the original script, which included UMAP and t-SNE algorithms. A multipurpose JMP script allowing allowing user to run tSpace, UMAP, t-SNE, Wanderlust, and Leiden algorithms on gene-cell data by interfacing with R and Matlab. Modifications include addition of the ability to reintegrate resultant data matrices back into original datasets, as well as cosmetic improvements and addition of row numbers, run date, and parameters to the results for user convenience. 
