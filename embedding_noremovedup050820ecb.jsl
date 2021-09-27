@@ -1,0 +1,1642 @@
+﻿/*
+Name: Embedding
+
+Description: This is an add-in that provides access to t-SNE, UMAP, tSpace, Wanderlust, and leiden algorithms for gene-cell data.
+It enables basic quality control, sparsity handling, parameter specification,
+and result intepretations.
+
+Author: Meijian Guan, Eugene Butcher, Aidan Kung
+
+Version: v1.10 1/4/2021
+
+Changelog:
+	v1.10: Added Wanderlust and Leiden algorithm functionality
+	v1.9: Added tSpace algorithm functionality
+	v1.8: Implemented an R-to-Matlab tSpace trajectory analysis option for the GUI. Corrected minor syntax errors that prevented tSNE from running properly. Tweaked reintegration step, and added hours/minutes to run time.
+	v1.7: Creates Row Numbers column for datasets that don't already have one; Concatenates a list of dimension input values to the end of the "Parameters" column in the output.
+	v1.6: Added a "Run Date" and "Parameters" column to the reintegrate data function, to be incorporated into the final output.
+	v1.5: Added a "Reintegrate data" button to place the dimensionality-reduced output data columns back into the input data table.
+	v1.4: Fixed "Unknown Font" error message. Also resolved algorithm selection "Name Unresolved" error.
+	v1.3: Added row selection interface and made UMAP the default. Also changed the GUI cosmetics to increase user friendliness.
+	v1.2: Fixed a bug for Rtsne package where too many columns would cause stack overflow.
+	v1.1: Fixed a bug that could cause "Issues found in R..." error message. Fixed a bug when Both algorithms are selected and no label is selected. 
+	v1: Initial version
+
+*/
+Names Default To Here(1); //HELP check if implemented tspace r script correctly
+include("JSL_Utils.jsl");
+if(hostis(windows),_slash_="\",_slash_="/");
+_addinPath_=Get Path Variable("$ADDIN_HOME('com.jmp.umaptsne1')");
+if(hostis(windows),
+	_addinPath_=Convert File Path(_addinPath_,windows));
+
+
+//A function to talk communicate with R: send script & data to R, get result table back.
+print(Get Default Directory());
+talk2R=function({data4R,label,algrthm, dim=dim1, perplexity=per1, iter=iter1, n_comp=dim2, n_neigb=per2, n_epch=iter2, dis=dist, knei=dim3, gra=per3, land=iter3, tra=distT, met=metri, s=dim4, k=per4, metr=met4, graph=gra4, landmark=lm4, respar=dim5}, //DONE added tspace vals to this line, fixed tSNE values here
+	{Default Local}, // (6)
+
+	labelText="";
+	if(nitems(label)>=1,
+		labelText=eval insert("\[
+		Labels<-inDataUniq[,names(inDataUniq) %in% label]
+		Labels<-as.list(Labels)
+		]\");
+	,
+	labelText=""
+	);
+	print(algrthm||" is selected!"); 
+	
+	Rtext=eval insert("\[
+	
+	data4R=data.frame(data4R)
+	label=unlist(label)
+	cat("label is: ",label,"\n")
+	#print(length(label))
+	#cat("\n")
+	
+	#remove duplicated observations from both datasets
+	inDataUniq=data4R #allow excluding multiple labels
+	#head(data4R)
+	cat("dim of inDataUniq is: ",dim(inDataUniq),"\n")
+	^labelText^
+	cat("Ready for Run","\n")
+	
+	if("^algrthm^"=="t-SNE"){
+		cat("We are running t-SNE","\n")
+		library("Rtsne")
+		inDataTsne=data.matrix(inDataUniq[,!names(inDataUniq) %in% label])
+		cat("dim of inDataTsne is: ",dim(inDataTsne),"\n")
+		tsne <- Rtsne(inDataTsne, dims = ^dim^, perplexity=^perplexity^, verbose=TRUE, max_iter = ^iter^,pca=F)
+		outputY=tsne$Y
+		head(outputY)
+	}else if("^algrthm^"=="UMAP"){
+		cat("We are running UMAP","\n")
+		library("umap")
+		outUmap=umap(inDataUniq[,!names(inDataUniq) %in% label], #method="umap-learn",
+			n_neighbors=^n_neigb^, n_components=^n_comp^, n_epochs=^n_epch^,min_dist=^dis^)
+		outputY=outUmap$layout
+		head(outputY)
+	}else if("^algrthm^"=="Both"){
+		cat("We are running Both","\n")
+		library("Rtsne")
+		library("umap")
+		cat("\n","Start t-sne","\n")
+		inDataTsne=data.matrix(inDataUniq[,!names(inDataUniq) %in% label])
+		tsne <- Rtsne(inDataTsne, dims = ^dim^, perplexity=^perplexity^, verbose=TRUE, max_iter = ^iter^,pca=F)
+		outputY1=tsne$Y
+		cat("Start umap","\n")
+		outUmap=umap(inDataUniq[,!names(inDataUniq) %in% label], #method="umap-learn",
+			n_neighbors=^n_neigb^, n_components=^n_comp^, n_epochs=^n_epch^,min_dist=^dis^)
+		outputY2=outUmap$layout
+		cat("Both done","\n")
+	}else if("^algrthm^"=="tspace") {
+		cat("We are running tSpace","\n")
+		library("devtools")
+		library("MATLABfuncs")
+		req.pkgs <- c("data.table")
+		missing.pkgs <- setdiff(req.pkgs, rownames(installed.packages()))
+		if(length(missing.pkgs) > 0) install.packages(missing.pkgs)
+		inDataTspace=inDataUniq[,!names(inDataUniq) %in% label]
+		tsp.dist.lut <- structure(list(r = c("euclidean", "pearson_correlation", "manhattan", 
+                                     "chebyshev", "canberra", "braycurtis", "simple_matching_coefficient", 
+                                     "minkowski", "hamming", "mahalanobis", "jaccard_coefficient", 
+                                     "Rao_coefficient", "euclidean", "euclidean"), 
+                               ml = c("euclidean", "correlation", "cityblock", "chebyshev", "euclidean", "euclidean", 
+                                      "euclidean", "minkowski", "hamming", "mahalanobis", "jaccard", 
+                                      "euclidean", "cosine", "spearman"), 
+                               dist.metric = c("euclidean", "correlation", "manhattan", "chebyshev", "canberra", "braycurtis", 
+                                               "simple_matching_coefficient", "minkowski", "hamming", "mahalanobis", 
+                                               "jaccard", "Rao_coefficient", "cosine", "spearman"), 
+                               r.abrv = c("eu", "cor", "manh", "cheb", "canb", "bray", "simp", "mink", "hamm", "maha", 
+                                          "jac", "Rao", "eu", "eu"), 
+                               ml.abrv = c("eu", "cor", "manh", "cheb", "eu", "eu", "eu", "mink", "hamm", "maha", "jac", "eu", 
+                                           "cos", "sp")), 
+                          class = "data.frame", 
+                          row.names = c(NA, -14L))
+        
+		
+		tSpaceOutput<-MATLABfuncs::run_tSpace(inDataTspace, trajectories=^tra^, k=^knei^, l="auto", metric=tsp.dist.lut$dist.metric[^met^], graphs=^gra^, landmarks=^land^) 
+		outputY=tSpaceOutput$tPCs
+		head(outputY)
+		
+	} else if("^algrthm^"=="wanderlust") {
+		cat("We are running Wanderlust","\n")
+		library("devtools")
+		library("MATLABfuncs")
+		req.pkgs <- c("data.table")
+		missing.pkgs <- setdiff(req.pkgs, rownames(installed.packages()))
+		if(length(missing.pkgs) > 0) install.packages(missing.pkgs)
+		inDataWander=inDataUniq[,!names(inDataUniq) %in% label]
+		wander.dist.lut <- structure(list(dist.metric = c("euclidean", "correlation", "cosine", "chebyshev", "minkowski", "hamming", "mahalanobis", "jaccard", "cityblock", "spearman")),
+			class = "data.frame", row.names = c(NA, -10))
+		WanderOutput<-MATLABfuncs::runWanderlust(inDataWander, s=^s^, k=^k^, metric=wander.dist.lut$dist.metric[^metr^], graphs=^graph^, landmarks=^landmark^)
+		WanderOutput[, 1]<-sort(WanderOutput[, 1])
+		outputY<-data.matrix(WanderOutput)
+		head(outputY)
+		
+	} else if("^algrthm^"=="leiden") {
+		cat("We are running Leiden","\n")
+		library("ggplot2")
+		library("igraph")
+		library("devtools")
+		library("remotes")
+		library("DESeq2")
+		library("fgsea")
+		library("openxlsx")
+		library("edgeR")
+		library("DelayedMatrixStats")
+		library("seqGlue")
+		req.pkgs <- c("data.table")
+		missing.pkgs <- setdiff(req.pkgs, rownames(installed.packages()))
+		if(length(missing.pkgs) > 0) install.packages(missing.pkgs)
+		inDataLeiden=inDataUniq[,!names(inDataUniq) %in% label]
+		result<-seqGlue::cluster(inDataLeiden, pd=data.frame(bc=rownames(inDataLeiden)), cluster_method="leiden", resolution=^respar^)
+		matri1<-t(matrix(1:nrow(inDataLeiden), nrow=1))
+		print(dim(matri1))
+		matri2<-result$clusters
+		print(dim(matri2))
+		matri3<-cbind(matri1, matri2)
+		outputY<-matri3
+		head(outputY)
+	}
+	
+	print("Analysis done!")
+	]\");
+	
+	R Term();
+	R Init();
+	R send(data4R);
+	if(nitems(label)>0,
+		R send(label)
+		,
+		label={""};
+		R send(label)
+	);
+	try(R submit(Rtext),throw("Issues found in R, could be caused by unsuccessful installation of Rtsne/umap packages or limited memory."));
+	try(close(data4R,nosave));
+	try(deletesymbols(jmp_labels));
+	try(deletesymbols(jmp_Y));
+	try(deletesymbols(jmp_Y1));
+	try(deletesymbols(jmp_Y2));
+	try(close(outputDT,nosave));
+	try(deletesymbols(outputDT));
+	try(close(outputDT1,nosave));
+	try(close(outputDT2,nosave));
+	try(deletesymbols(outputDT1));
+	try(deletesymbols(outputDT2));
+		
+	if(algrthm=="Both",
+		try(jmp_Y1=R get(outputY1),throw("Issues found in R, could be caused by unsuccessful installation of Rtsne/umap packages or limited memory."));
+		try(jmp_Y2=R get(outputY2),throw("Issues found in R, could be caused by unsuccessful installation of Rtsne/umap packages or limited memory."));
+		if(ismissing(jmp_Y1) | ismissing(jmp_Y2),
+			throw("Issues found in R, could be caused by unsuccessful installation of Rtsne/umap packages or limited memory.")
+		)
+		,
+		try(jmp_Y=R get(outputY),throw("Issues found in R, could be caused by unsuccessful installation of Rtsne/umap packages or limited memory."));
+		if(ismissing(jmp_Y),
+			throw("Issues found in R, could be caused by unsuccessful installation of Rtsne/umap packages or limited memory.")
+		)
+	);
+	
+	
+	if(nitems(label)>=1 & label[1]!="",
+		jmp_labels=R get(Labels));
+
+
+
+
+	currentVars=namespace("here")<<getkeys;
+	while((!contains(currentVars,"jmp_Y") & !contains(currentVars,"jmp_Y1") & !contains(currentVars,"jmp_Y2")) & !contains(currentVars,"jmp_labels"),
+		wait(0.5);
+		print("You are in a while loop");
+		currentVars=namespace("here")<<getkeys
+	);
+	print("Got results from R!");
+	
+	changeName=expr(for(i=1,i<=ncols,i++,
+		cName=column(outputDT,1)<<get name;//?
+		newname="Y"||char(i);
+		column(outputDT,i)<<set name(newname)
+	));
+	//close(inData2R,nosave);
+
+	//get outputDT, need to close label table.
+	if(nitems(label)>1,
+		if(Type(jmp_labels)=="Table",
+			labelDT=jmp_labels;
+			try(close(jmp_labels,nosave))
+			,
+			type(jmp_labels)=="Associative Array"
+			,
+			keys=jmp_labels<<getkeys;
+			labelDT=New Table("label_DT","invisible");
+			for(colN=1,colN<=N Items(jmp_labels),colN++,
+				labelDT<<New Column(keys[colN],character,setvalues(jmp_labels[keys[colN]]))
+			)
+		
+		);
+		
+		if(algrthm=="Both",
+			outputDT1=astable(jmp_Y1,<<invisible);
+			outputDT1<<join(with(labelDT),by row number,output table("output_table1"),"invisible");
+			close(outputDT1,nosave);
+			
+			outputDT1=datatable("output_table1");
+			ncols1=Ncols(outputDT1)-nitems(label);
+			eval(Substitute(nameexpr(changeName),expr(ncols),expr(ncols1),expr(outputDT),expr(outputDT1)));
+
+			outputDT2=astable(jmp_Y2,<<invisible);
+			outputDT2<<join(with(labelDT),by row number,output table("output_table2"),"invisible");
+			close(outputDT2,nosave);
+			outputDT2=datatable("output_table2");
+			ncols2=Ncols(outputDT2)-nitems(label);
+			eval(Substitute(nameexpr(changeName),expr(ncols),expr(ncols2),expr(outputDT),expr(outputDT2)));
+			try(close(jmp_labels,nosave));
+			try(close(labelDT,nosave))
+			,
+			outputDT=astable(jmp_Y,<<invisible);
+			outputDT<<join(with(labelDT),by row number,output table("output_table"),"invisible");
+			try(close(outputDT,nosave));
+			try(close(jmp_labels,nosave));
+			try(close(labelDT,nosave));
+			outputDT=datatable("output_table");
+			ncols=Ncols(outputDT)-nitems(label);
+			changeName
+		);
+		,//end of condition 1
+		nitems(label)==1 & label[1]!=""
+		,
+		jmpLabels={};
+		for(k=1,k<=length(jmp_labels),k++,
+			insertinto(jmpLabels,char(jmp_labels[k]))
+		);
+		labelDT=New Table(label[1],"invisible",New Column(label[1],character, setvalues(jmpLabels)));
+		if(algrthm=="Both",
+			outputDT1=astable(jmp_Y1,<<invisible);
+			outputDT1<<join(with(labelDT),by row number,output table("output_table1"),"invisible");
+			close(outputDT1,nosave);
+			outputDT1=datatable("output_table1");
+			ncols1=Ncols(outputDT1)-nitems(label);
+			eval(Substitute(nameexpr(changeName),expr(ncols),expr(ncols1),expr(outputDT),expr(outputDT1)));
+			
+			outputDT2=astable(jmp_Y2,<<invisible);
+			outputDT2<<join(with(labelDT),by row number,output table("output_table2"),"invisible");
+			close(outputDT2,nosave);
+			outputDT2=datatable("output_table2");
+			ncols2=Ncols(outputDT2)-nitems(label);
+			eval(Substitute(nameexpr(changeName),expr(ncols),expr(ncols2),expr(outputDT),expr(outputDT2)));
+			close(labelDT,nosave);		
+			,
+			outputDT=astable(jmp_Y,<<invisible);
+			outputDT<<join(with(labelDT),by row number,output table("output_table"),"invisible");
+			close(outputDT,nosave);
+			outputDT=datatable("output_table");
+			ncols=Ncols(outputDT)-nitems(label);
+			changeName;
+			close(labelDT,nosave);
+			)
+		,//end of condition 2
+		print("You are in condition 3");
+		if(algrthm=="Both",
+		outputDT1=astable(jmp_Y1,<<invisible);
+		outputDT1<<Set Name("output_table1");
+		ncols1=Ncols(outputDT1);
+		eval(Substitute(nameexpr(changeName),expr(ncols),expr(ncols1),expr(outputDT),expr(outputDT1)));
+		print("change name for table 1");
+		outputDT2=astable(jmp_Y2,<<invisible);
+		outputDT2<<Set Name("output_table2");
+		ncols2=Ncols(outputDT2);
+		eval(Substitute(nameexpr(changeName),expr(ncols),expr(ncols2),expr(outputDT),expr(outputDT2)));
+		print("change name for table 1");
+		,
+		outputDT=astable(jmp_Y,<<invisible);
+		ncols=Ncols(outputDT);
+		changeName)
+	);
+	R Term();
+
+	if(algrthm=="t-SNE",  //DONE added algrthm == for tspace
+		return(outputDT);
+		,
+		algrthm=="UMAP",
+
+		return(outputDT);
+		,
+		algrthm=="tspace",
+		return(outputDT);
+		,
+		algrthm=="wanderlust",
+		return(outputDT);
+		,
+		algrthm=="leiden",
+		return(outputDT);
+		,
+		outputDTs={};
+		insertinto(outputDTs,outputDT1);
+		insertinto(outputDTs,outputDT2);
+		return(outputDTs)
+	);
+	
+);
+
+
+
+//data2R=inDataPrep(inData,parameter,labelY);
+//colNames=parameter;
+//labels=labelY;
+//a function to select columns and rows and perform svd
+getRawR=function({inData,colNames,labels,selectedRows}, // (4)
+	{Default Local},
+	
+	inDataD = if(selectedRows=="All Rows", inData,
+				inData << Subset(invisible, output Table("inDataFilter"), Selected Rows(1), Selected Columns(0)))
+	; // Raw data table that the math is performed on to then pass into R
+	return(inDataD)
+);
+inDataPrep=function({inData,colNames,labels,selectedRows}, // (2)
+	{Default Local},
+	
+	inDataD = if(selectedRows=="All Rows", inData,
+				inData << Subset(invisible, output Table("inDataFilter"), Selected Rows(1), Selected Columns(0)))
+	;
+    // MATH to prepare data for R
+	inDataSVD = inDataD << Subset(invisible,
+					output Table( "inDataTableForSVD" ),
+					All rows,
+					columns( eval(colNames)));
+	
+	inDataSVDM=inDataSVD<<Get as Matrix;
+	Sparsity=1-nitems(loc(inDataSVDM))/nitems(inDataSVDM);
+	
+	if(Sparsity>0.5 & ncols(inDataSVD)>50,
+		inDataSVDout=Sparse SVD(inDataSVDM,20);
+		svdU=inDataSVDout[1];
+		inData2R=astable(svdU,<<invisible);
+		inData2R<<setname("SVD2R");
+		try(close(inDataSVD,nosave));
+		//insertinto(Here:tb2close,inData2R);
+		
+		if(nitems(labels)>=1,
+			inDataLabs = inDataD << Subset(invisible,
+					output Table( "inDataLabels" ),
+					All rows,
+					columns( eval(labels) )
+				);
+			inData2R<<join(with(datatable("inDataLabels")),by row number,output table("SVD2R2"),"invisible");
+			try(close(inData2R,nosave);
+			Delete Symbols(inData2R));
+			inData2R=datatable("SVD2R2");
+
+			try(close(inDataLabs,nosave));
+			try(close(inDataSVD,nosave));
+
+		),
+		
+		if(nitems(labels)>=1,
+			inDataLabs = inDataD << Subset(invisible,
+					output Table( "inDataLabels" ),
+					All rows,
+					columns( eval(labels) )
+				);
+			inDataSVD<<join(with(datatable("inDataLabels")),by row number,output table("SVD2R2"),"invisible");
+			try(close(inDataSVD,nosave);
+			Delete Symbols(inDataSVD));
+			inData2R=datatable("SVD2R2");
+
+			try(close(inDataLabs,nosave));
+			,
+			inData2R=inDataSVD
+		)
+			
+	);
+	//close()
+	print("Dim of inData2R is: ", nrow(inData2R),ncol(inData2R));
+	// END MATH to prepare data for R
+	return(inData2R)
+);
+//data2R=inDataPrep(inData,subNames,labels);
+
+//expression for select columns
+colInfo=expr(
+	selectColHlb=hlistbox(
+
+		pb12=panelbox("Selected Columns",
+			vlistbox(
+				hlistbox(
+					buttonbox("Label (Optional)",
+						
+						selectedY<<append(colSelector<< Get Selected)
+					),
+					selectedY=listbox()
+				),
+				textbox(""),
+				hlistbox(
+					buttonbox("Parameters", /* Aidan edit predictors to parameters*/
+						
+						selectedX<<append(colSelector<< Get Selected)
+					),
+					selectedX=listbox()
+				)
+			)
+		),
+		pb13=panelbox("Action",
+			buttonbox("Remove",
+				selectedY<<Remove Selected;
+				selectedX<<Remove Selected
+			)
+		)
+	)
+);
+
+//expression for the QC dialog
+qcDialog=expr(
+	qcolb=outlinebox("Quality Control Options",<<close(1),
+	panelbox("Column Selection",
+	vlistbox(
+		panelbox("Check Missing",
+		hlistbox(
+		vlistbox(buttonbox("Select Columns",
+			selectedSprs1<<append(colSelector<< Get Selected)
+		),
+		buttonbox("Remove",selectedSprs1<<Remove Selected)
+		),
+		selectedSprs1=listbox())
+		),
+		textbox(""),
+		panelbox("Check Distribution",
+			hlistbox(
+			vlistbox(buttonbox("Select Columns",
+				selectedSprs2<<append(colSelector<< Get Selected)
+			),
+			buttonbox("Remove",selectedSprs2<<Remove Selected)
+			),
+			selectedSprs2=listbox())
+		),
+		textbox(""),
+		hlbsprs=hlistbox(
+		panelbox("Check Sparsity",
+			hlistbox(
+				vlistbox(buttonbox("Select Columns",
+					selectedSprs3<<append(colSelector<< Get Selected)
+				),
+				buttonbox("Remove",selectedSprs3<<Remove Selected)
+				),
+				selectedSprs3=listbox()
+			)
+		)
+
+		)
+	
+		)
+	),//end of column selection panel box
+	textbox(""),
+		hlistbox(
+			buttonbox("Run",
+				//check missing data
+				try(qcOlbx<<delete;
+					CloseConflictingWindows("subset_dist");
+					CloseConflictingWindows("Missing Data Pattern")
+				);
+				//try(CloseConflictingWindows("subset_dist"));
+				//try(CloseConflictingWindows("Missing Data Pattern"));
+				selectedSprsCols1=selectedSprs1<<getitems;
+				selectedSprsCols2=selectedSprs2<<getitems;
+				selectedSprsCols3=selectedSprs3<<getitems;
+				if(nitems(selectedSprsCols1)<1 & nitems(selectedSprsCols2)<1 & nitems(selectedSprsCols3)<1,throw("Please select columns first!"));
+				if(nitems(selectedSprsCols1)>0,
+				
+				
+				subsetDt1=inData << Subset(invisible,
+					output Table( "subset_missing" ),
+					All rows,
+					columns( eval(selectedSprsCols1) )
+				);
+				
+				colRefs1 = {};
+				For( i = 1, i <= N Cols( subsetDt1 ), i++,
+				  Insert Into( colRefs1, Column( subsetDt1, i ) )
+				);
+				mdp = inData << Missing Data Pattern( columns( Eval( colRefs1 ) ), Output Table( "Missing Data Pattern" ),"invisible" );
+				try(close(subsetDt1,nosave));
+				resText1=expr(
+					qc1olb=outlinebox("Missing Values",
+					mdp<<New Data Box())
+				)
+				,
+				resText1=expr();
+				);
+				
+				//check distribution
+				if(nitems(selectedSprsCols2)>0,
+					subsetDt2=inData << Subset(invisible,
+						output Table( "subset_dist" ),
+						All rows,
+						columns( eval(selectedSprsCols2) )
+					);
+					resText2=expr(qc2olb=outlinebox("Distribution",
+						Scroll Box(
+							Border Box(dist=subsetDt2<<Distribution(column(eval(selectedSprsCols2))))
+						)
+					));
+					,
+					resText2=expr();
+				);
+				
+				//check sparsity
+				if(nitems(selectedSprsCols3)>0,
+					subsetDt3=inData << Subset(invisible,
+						output Table( "subset_sparsity" ),
+						All rows,
+						columns( eval(selectedSprsCols3) )
+					);
+					subsetMtx3=subsetDt3<<get as matrix;
+					mtxSparse=1-nitems(loc(subsetMtx3))/nitems(subsetMtx3);
+					resText3=expr(qc3olb=outlinebox("Sparsity",
+						resSprs=panelbox("Result",
+						hlistbox(
+						textbox(""),
+						textbox("Sparsity of this matrix is: "||char(round(mtxSparse,5))||".",setfontsize(12))
+						)
+					)
+					))
+					,
+					resText3=expr()
+				);
+				try(close(subsetDt3, nosave));
+				
+
+				//add QC results to QC tab
+				try(
+				outvlb<<getsize;
+				try(qcOlbx<<delete);
+				outvlb<<append(qcOlbx=outlinebox("QC Result",
+					V Scroll Box(flexible(1),
+					//vlbqc=V Splitter Box(<<set sizes({0.2,0.6,0.2}),//add all qc results
+					vlbqc=V list Box(
+					resText1
+					,//end of qc1 olb
+					resText2
+					,//end of qc2 olb
+					resText3
+					//end of qc3 olb
+					)
+					)
+					)
+					);
+				//try(resOlb<<close(1));
+				//try(olb2<<close(1));
+				//interface<<Maximize Window( 1 );
+				,//end of condition 1
+				
+				HSBParent<<append(HSB3=hsplitterbox());
+				HSB3<<append(olb3=outlinebox("Results",
+					outvlb=v list box(
+						qcOlbx=outlinebox("QC Result",
+						V Scroll Box(flexible(1),
+							//vlbqc=V Splitter Box(<<sizes({0.2,0.6,0.2}),//add all qc results, change to vsplitterbox
+							vlbqc=V list Box(
+							resText1,
+							resText2,
+							resText3
+							)
+						)	
+						)
+					)
+				/*outTabs=tabbox(qcTab=tab page box("QC Result",
+					vlbqc=V Splitter Box(<<sizes({0.2,0.6,0.2}),//add all qc results, change to vsplitterbox
+						resText1,
+						resText2,
+						resText3
+					)
+				)
+			)*///end of tabbox
+			, 
+			<<outlinecloseorientation( "Vertical" )
+			),
+			<<close(0)
+			)
+			);//end of add qc tab
+			try(resOlb<<close(1));
+			try(olb2<<close(1));
+			//interface<<Set Window Size(1100, 800);
+			interface<<Maximize Window( 1 );
+		),
+		
+		buttonbox("Reset",
+			try(colSelector<<clear selection);
+			try(
+				Delete Symbols(selectedSprsCols1);
+				Delete Symbols(selectedSprsCols2);
+				Delete Symbols(selectedSprsCols3);
+				selectedSprs1<<Set Items();
+				selectedSprs2<<Set Items();
+				selectedSprs3<<Set Items();
+			)
+		)
+	//))
+	)//end of hlistbox
+		
+	//)
+		
+));//end of expr
+
+reintegratedata=expr(evalinsert("\[
+	
+	if(algr=="UMAP",
+		dtbSubset = ^outDt^ << subset("Invisible", All rows, columns( :Y1, :Y2, :Row number, :Parameters, :Run_Date) );	
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y1 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y2 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Parameters )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Run_Date )
+							);
+		,
+		algr=="t-SNE",
+		dtbSubset = ^outDt^ << subset("Invisible", All rows, columns( :Y1, :Y2, :Row number, :Parameters, :Run_Date) );
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y1 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y2 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Parameters )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Run_Date )
+							);
+		,
+		algr=="tspace",
+		dtbSubset = ^outDt^ << subset("Invisible", All rows, columns( :Y1, :Y2, :Y3, :Y4, :Y5, :Y6, :Y7, :Y8, :Y9, :Y10, :Y11, :Y12, :Y13, :Y14, :Y15, :Y16, :Y17, :Y18, :Y19, :Y20, :Row number, :Parameters, :Run_Date) );
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y1 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y2 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y3 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y4 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y5 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y6 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y7 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y8 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y9 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y10 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y11 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y12 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y13 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y14 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y15 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y16 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y17 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y18 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y19 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y20 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Parameters )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Run_Date )
+							);
+		,
+		algr=="leiden",
+		dtbSubset = ^outDt^ << subset("Invisible", All rows, columns( :Y1, :Y2, :Row number, :Parameters, :Run_Date) );
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y2 )
+							);					
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Parameters )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Run_Date )
+							);
+		,			
+		algr=="wanderlust",
+		dtbSubset = ^outDt^ << subset("Invisible", All rows, columns( :Y1, :Y2, :Row number, :Parameters, :Run_Date) );
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y1 )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Y2 )
+							);					
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Parameters )
+							);
+		^inData^ << Update( With( dtbSubset ),
+							Match columns(:Row number = :Row number),
+							Add Columns from Update table( :Run_Date )
+							);			
+	);
+	dtbSubset<< close();
+	rows << close();
+	^inDataD^<<close();
+	if(algr=="UMAP", 
+		:Y1 << Set Name( “UMAP1#” );
+		:Y2 << Set Name( “UMAP2#” );
+		:Parameters << Set Name( “UMAP_Params#” );	
+		,
+		algr=="tspace",
+		:Y1 << Set Name( “tSpace1#” );
+		:Y2 << Set Name( “tSpace2#” );
+		:Y3 << Set Name( “tSpace3#” );
+		:Y4 << Set Name( “tSpace4#” );
+		:Y5 << Set Name( “tSpace5#” );
+		:Y6 << Set Name( “tSpace6#” );
+		:Y7 << Set Name( “tSpace7#” );
+		:Y8 << Set Name( “tSpace8#” );
+		:Y9 << Set Name( “tSpace9#” );
+		:Y10 << Set Name( “tSpace10#” );
+		:Y11 << Set Name( “tSpace11#” );
+		:Y12 << Set Name( “tSpace12#” );
+		:Y13 << Set Name( “tSpace13#” );
+		:Y14 << Set Name( “tSpace14#” );
+		:Y15 << Set Name( “tSpace15#” );
+		:Y16 << Set Name( “tSpace16#” );
+		:Y17 << Set Name( “tSpace17#” );
+		:Y18 << Set Name( “tSpace18#” );
+		:Y19 << Set Name( “tSpace19#” );
+		:Y20 << Set Name( “tSpace20#” );
+		:Parameters << Set Name( “tSpace_Params#” );
+		,
+		algr=="t-SNE",
+		:Y1 << Set Name( "t-SNE1#");
+		:Y2 << Set Name( "t-SNE2#");
+		:Parameters << Set Name( “tSNE_Params#” );
+		,
+		algr=="leiden",
+		:Y2 << Data Type ( Character );
+		:Y2 << Set Name( "Clusters#");
+		:Parameters << Set Name( “Leiden_Params#” );
+		,
+		algr=="wanderlust",
+		:Y1 << Set Name( "Wander1#");
+		:Y2 << Set Name( "Wander2#");
+		:Parameters << Set Name( “Wander_Params#” );
+	);
+	:Run_Date << Set Name( “Run#Date” );
+]\"));
+//expression to create a graph for the result table
+gbx2expr=expr(evalinsert("\[^resDT^<<Graph Builder(
+	Size( 700, 400 ),
+	Show Control Panel( 0 ),
+	Variables( ^grphVars^ ),
+	Elements( Points( X, Y, Legend( 3 ) ) ),
+	SendToReport(
+		Dispatch( {}, "Graph Builder",OutlineBox, {Set Title( ^grphName^ )}),
+		Dispatch(
+			{},
+			"Y2",
+			ScaleBox,
+			{Label Row( {Set Font( "" ), Set Font Size( 11 )} )}
+		),
+		Dispatch(
+			{},
+			"Y1",
+			ScaleBox,
+			{Label Row( {Set Font( "" ), Set Font Size( 11 )} )}
+		),
+		Dispatch( {}, "graph title", TextEditBox, {Set Font Size( 14 )} ),
+		Dispatch(
+			{},
+			"X title",
+			TextEditBox,
+			{Set Font Size( 12 ), Set Font Style( "Bold" )}
+		),
+		Dispatch(
+			{},
+			"Y title",
+			TextEditBox,
+			{Set Font Size( 12 ), Set Font Style( "Bold" )}
+		),
+		Dispatch( {}, "Graph Builder", FrameBox, {Marker Size( 5 )} )
+	)
+)]\"));
+
+//get values of model setting boxes and write them to jsl file.
+write2lastRun=function({ref,addinPath},
+	{Default Local},
+	try(ref<<getsize,throw("Model Setup not exist!"));
+	algrLast=(ref<<xpath("//ComboBox"))<<getselected;
+	paraLast=(ref<<xpath("//NumberEditBox"))<<get;
+	print(algrLast);
+	print(paraLast);
+	text2save=evalinsert(
+		"\[algrLast=^algrLast^;
+paraLast=^paraLast^;
+		]\"
+	);
+	addinPathScript=addinPath||"scripts"||_slash_||"lastRun.jsl";
+	Save Text File(addinPathScript,text2save,mode("replace"));
+);
+
+//main expression to generate interface
+
+exInterface=expr(
+interface=New Window("Embedding",showtoolbars(0),showmenu(0),<<Bring Window to Front,
+		borderbox(left(10),right(10),top(10),bottom(10),
+		HSBParent=H splitter box(
+			olb2 = outlinebox("Embedding",
+		<<outlinecloseorientation( "Vertical" ),
+		parentHlb=hlistbox(
+		ColQcVlb=vlistbox(cololb=outlinebox("Column Selection", panelbox("Available Columns",
+								colSelector=Filter Col Selector(all,width( 350 ),nlines( 17 ))))
+			,
+			rowolb=outlinebox("Row Selection",panelbox("Row selection",selectRows=Combo Box({"Selected Rows", "All Rows"}))),
+			qcDialog
+		),
+		textbox(""),
+		modelolb=outlinebox("Model Specification",<<outlinecloseorientation( "Horizontal" ),
+			vlb=V List Box(colInfo)
+		,
+	h list box(pb2=panelbox("Model Setup",
+		
+		modelSet=vlistbox(
+			hlistbox(Textbox("Algorithm: "),
+				cbb=combobox({"UMAP","t-SNE","Both","tspace","wanderlust","leiden"}, //HELP fix metrics box
+				//The following fills in default values for selected algorithms
+					
+					algr=cbb<<get selected();
+					if(algr=="t-SNE",
+						dimBx1=numbereditbox(2,<<setformat(3));
+						perBx1=numbereditbox(30,<<setformat(4));
+						iterBx1=numbereditbox(500,<<setformat(5));
+						dimBx2=numbereditbox(2,<<setformat(3));
+						perBx2=numbereditbox(15,<<setformat(4));
+						iterBx2=numbereditbox(200,<<setformat(5));
+						distbox=numbereditbox(0.1,<<setformat(5));
+						dimBx3=numbereditbox(25,<<setformat(4));
+						perBx3=numbereditbox(5,<<setformat(3));
+						iterBx3=numbereditbox(10,<<setformat(4));
+						distboxT=numbereditbox(200,<<setformat(5));
+						metricbx=numbereditbox(1,<<setformat(3));
+						dimBx4=numbereditbox(1,<<setformat(3));
+						perBx4=numbereditbox(20,<<setformat(4));
+						metBx4=numbereditbox(1,<<setformat(3));
+						graBx4=numbereditbox(20,<<setformat(4));
+						lmBx4=numbereditbox(20,<<setformat(4));
+						dimBx5=numbereditbox(0.5,<<setformat(5));
+						metricsop<<delete;
+						params<<delete;
+						modelSet<<append(
+						params=hlistbox(
+							textbox("Output Dim "),
+							dimBx1=numbereditbox(2,<<setformat(3)),
+							textbox(""),
+							textbox("Perplexity "),
+							perBx1=numbereditbox(30,<<setformat(4)),
+							textbox(""),
+							textbox("Max Iter "),
+							iterBx1=numbereditbox(500,<<setformat(5))
+						));
+						modelSet<<append(
+							metricsop=textbox("")
+						);
+						try(resTab<<getsize,interface<<set window Size(950, 580))
+						,//end of condition for t-SNE
+						algr=="UMAP",
+						dimBx1=numbereditbox(2,<<setformat(3));
+						perBx1=numbereditbox(30,<<setformat(4));
+						iterBx1=numbereditbox(500,<<setformat(5));
+						dimBx2=numbereditbox(2,<<setformat(3));
+						perBx2=numbereditbox(15,<<setformat(4));
+						iterBx2=numbereditbox(200,<<setformat(5));
+						distbox=numbereditbox(0.1,<<setformat(5));
+						dimBx3=numbereditbox(25,<<setformat(4));
+						perBx3=numbereditbox(5,<<setformat(3));
+						iterBx3=numbereditbox(10,<<setformat(4));
+						distboxT=numbereditbox(200,<<setformat(5));
+						metricbx=numbereditbox(1,<<setformat(3));
+						dimBx4=numbereditbox(1,<<setformat(3));
+						perBx4=numbereditbox(20,<<setformat(4));
+						metBx4=numbereditbox(1,<<setformat(3));
+						graBx4=numbereditbox(20,<<setformat(4));
+						lmBx4=numbereditbox(20,<<setformat(4));
+						dimBx5=numbereditbox(0.5,<<setformat(5));
+						metricsop<<delete;
+						params<<delete;
+						modelSet<<append(
+							params=hlistbox(
+								textbox("Output Dim "),
+								dimBx2=numbereditbox(2,<<setformat(3)),
+								textbox(""),
+								textbox("n_neighbors "),
+								perBx2=numbereditbox(15,<<setformat(4)),
+								textbox(""),
+								textbox("n_epochs "),
+								iterBx2=numbereditbox(200,<<setformat(5)),
+								textbox(""),
+								textbox("min_dist "),
+								distbox=numbereditbox(0.1,<<setformat(5))
+							)
+							
+						);
+						modelSet<<append(
+							metricsop=textbox("")
+						);
+						interface<<getsize;
+						try(resTab<<getsize,interface<<set window Size(1100, 580))
+						,//end of condition for UMAP, //DONE start condition tspace
+						algr=="tspace",
+						dimBx1=numbereditbox(2,<<setformat(3));
+						perBx1=numbereditbox(30,<<setformat(4));
+						iterBx1=numbereditbox(500,<<setformat(5));
+						dimBx2=numbereditbox(2,<<setformat(3));
+						perBx2=numbereditbox(15,<<setformat(4));
+						iterBx2=numbereditbox(200,<<setformat(5));
+						distbox=numbereditbox(0.1,<<setformat(5));
+						dimBx3=numbereditbox(25,<<setformat(4));
+						perBx3=numbereditbox(5,<<setformat(3));
+						iterBx3=numbereditbox(10,<<setformat(4));
+						distboxT=numbereditbox(200,<<setformat(5));
+						metricbx=numbereditbox(1,<<setformat(3));
+						dimBx4=numbereditbox(1,<<setformat(3));
+						perBx4=numbereditbox(20,<<setformat(4));
+						metBx4=numbereditbox(1,<<setformat(3));
+						graBx4=numbereditbox(20,<<setformat(4));
+						lmBx4=numbereditbox(20,<<setformat(4));
+						dimBx5=numbereditbox(0.5,<<setformat(5));
+						metricsop<<delete;
+						params<<delete;
+						modelSet<<append(
+							params=hlistbox(
+								textbox("kNN"),
+								dimBx3=numbereditbox(25,<<setformat(4)),
+								textbox(""),
+								textbox("Graphs"),
+								perBx3=numbereditbox(5,<<setformat(3)),
+								textbox(""),
+								textbox("Landmarks"),
+								iterBx3=numbereditbox(10,<<setformat(4)),
+								textbox(""),
+								textbox("Trajectories"),
+								distboxT=numbereditbox(200,<<setformat(5)),
+								textbox(""),
+								textbox("Metric"),
+								metricbx=numbereditbox(1,<<setformat(3))
+							)
+						);
+							
+						modelSet<<append(
+							metricsop=textbox("Metric inputs are: (1) euclidean, (2) correlation, (3) manhattan, (4) chebyshev, (5) canberra, (6) braycurtis, (7) simple_matching_coefficient, (8) minkowski, (9) hamming, (10) mahalanobis, (11) jaccard, (12) Rao_coefficient, (13) cosine, (14) spearman")
+						);	 
+						
+						
+						try(resTab<<getsize,interface<<set window Size(1100, 580))
+						,//end of condition for tspace
+						algr=="Both",
+						dimBx1=numbereditbox(2,<<setformat(3));
+						perBx1=numbereditbox(30,<<setformat(4));
+						iterBx1=numbereditbox(500,<<setformat(5));
+						dimBx2=numbereditbox(2,<<setformat(3));
+						perBx2=numbereditbox(15,<<setformat(4));
+						iterBx2=numbereditbox(200,<<setformat(5));
+						distbox=numbereditbox(0.1,<<setformat(5));
+						dimBx3=numbereditbox(25,<<setformat(4));
+						perBx3=numbereditbox(5,<<setformat(3));
+						iterBx3=numbereditbox(10,<<setformat(4));
+						distboxT=numbereditbox(200,<<setformat(5));
+						metricbx=numbereditbox(1,<<setformat(3));
+						dimBx4=numbereditbox(1,<<setformat(3));
+						perBx4=numbereditbox(20,<<setformat(4));
+						metBx4=numbereditbox(1,<<setformat(3));
+						graBx4=numbereditbox(20,<<setformat(4));
+						lmBx4=numbereditbox(20,<<setformat(4));
+						dimBx5=numbereditbox(0.5,<<setformat(5));
+						metricsop<<delete;
+						params<<delete;
+						modelSet<<append(
+						params=vlistbox(
+						hlistbox(
+							textbox("t-SNE: "),//textbox(""),
+							textbox("Output Dim "),
+							dimBx1=numbereditbox(2,<<setformat(3)),
+							textbox(""),
+							textbox("Perplexity "),
+							perBx1=numbereditbox(30,<<setformat(4)),
+							textbox(""),
+							textbox("Max Iter "),
+							iterBx1=numbereditbox(500,<<setformat(5))
+						),
+						textbox(""),
+						hlistbox(
+							textbox("UMAP: "),//textbox(""),
+							textbox("Output Dim "),
+							dimBx2=numbereditbox(2,<<setformat(3)),
+							textbox(""),
+							textbox("n_neighbors "),
+							perBx2=numbereditbox(15,<<setformat(4)),
+							textbox(""),
+							textbox("n_epochs "),
+							iterBx2=numbereditbox(200,<<setformat(5)),
+							textbox(""),
+							textbox("min_dist "),
+							distbox=numbereditbox(0.1,<<setformat(5))
+						)
+							
+						)
+							
+						);
+						modelSet<<append(
+							metricsop=textbox("")
+						);
+						try(resTab<<getsize,interface<<set window Size(1150, 580))
+						,
+						algr=="leiden",
+						dimBx1=numbereditbox(2,<<setformat(3));
+						perBx1=numbereditbox(30,<<setformat(4));
+						iterBx1=numbereditbox(500,<<setformat(5));
+						dimBx2=numbereditbox(2,<<setformat(3));
+						perBx2=numbereditbox(15,<<setformat(4));
+						iterBx2=numbereditbox(200,<<setformat(5));
+						distbox=numbereditbox(0.1,<<setformat(5));
+						dimBx3=numbereditbox(25,<<setformat(4));
+						perBx3=numbereditbox(5,<<setformat(3));
+						iterBx3=numbereditbox(10,<<setformat(4));
+						distboxT=numbereditbox(200,<<setformat(5));
+						metricbx=numbereditbox(1,<<setformat(3));
+						dimBx4=numbereditbox(1,<<setformat(3));
+						perBx4=numbereditbox(20,<<setformat(4));
+						metBx4=numbereditbox(1,<<setformat(3));
+						graBx4=numbereditbox(20,<<setformat(4));
+						lmBx4=numbereditbox(20,<<setformat(4));
+						dimBx5=numbereditbox(0.5,<<setformat(5));
+						metricsop<<delete;
+						params<<delete;
+						modelSet<<append(
+							params=hlistbox(
+								textbox("res_param"),
+								dimBx5=numbereditbox(0.5,<<setformat(5))
+							)
+						);
+						modelSet<<append(
+							metricsop=textbox("Clustering algorithm options: (1) UMAP, (2) tSNE, (3) PCA, (4) LSI, (5) Aligned")
+						);	
+						try(resTab<<getsize,interface<<set window Size(1100, 580))
+						,
+						algr=="wanderlust",
+						dimBx1=numbereditbox(2,<<setformat(3));
+						perBx1=numbereditbox(30,<<setformat(4));
+						iterBx1=numbereditbox(500,<<setformat(5));
+						dimBx2=numbereditbox(2,<<setformat(3));
+						perBx2=numbereditbox(15,<<setformat(4));
+						iterBx2=numbereditbox(200,<<setformat(5));
+						distbox=numbereditbox(0.1,<<setformat(5));
+						dimBx3=numbereditbox(25,<<setformat(4));
+						perBx3=numbereditbox(5,<<setformat(3));
+						iterBx3=numbereditbox(10,<<setformat(4));
+						distboxT=numbereditbox(200,<<setformat(5));
+						metricbx=numbereditbox(1,<<setformat(3));
+						dimBx4=numbereditbox(1,<<setformat(3));
+						perBx4=numbereditbox(20,<<setformat(4));
+						metBx4=numbereditbox(1,<<setformat(3));
+						graBx4=numbereditbox(20,<<setformat(4));
+						lmBx4=numbereditbox(20,<<setformat(4));
+						dimBx5=numbereditbox(0.5,<<setformat(5));
+						metricsop<<delete;
+						params<<delete;
+						modelSet<<append(
+							params=hlistbox(
+								textbox("S"),
+								dimBx4=numbereditbox(1,<<setformat(3)),
+								textbox(""),
+								textbox("K"),
+								perBx4=numbereditbox(20,<<setformat(4)),
+								textbox(""),
+								textbox("Metric"),
+								metBx4=numbereditbox(1,<<setformat(3)),
+								textbox(""),
+								textbox("Graphs"),
+								graBx4=numbereditbox(20,<<setformat(4)),
+								textbox(""),
+								textbox("Landmarks"),
+								lmBx4=numbereditbox(20,<<setformat(4))
+							)
+						);
+							
+						modelSet<<append(
+							metricsop=textbox("Metric inputs are: (1) euclidean, (2) correlation, (3) cosine, (4) chebyshev, (5) minkowski, (6) hamming, (7) mahalanobis, (8) jaccard, (9) cityblock, (10) spearman")
+						);	 
+						
+						
+						try(resTab<<getsize,interface<<set window Size(1100, 580))
+					)
+				)
+					
+			),
+			//sets values for default algorithm "UMAP"
+			dimBx1=numbereditbox(2,<<setformat(3));
+			perBx1=numbereditbox(30,<<setformat(4));
+			iterBx1=numbereditbox(500,<<setformat(5));
+			dimBx2=numbereditbox(2,<<setformat(3));
+			perBx2=numbereditbox(15,<<setformat(4));
+			iterBx2=numbereditbox(200,<<setformat(5));
+			distbox=numbereditbox(0.1,<<setformat(5));
+			dimBx3=numbereditbox(25,<<setformat(4));
+			perBx3=numbereditbox(5,<<setformat(3));
+			iterBx3=numbereditbox(10,<<setformat(4));
+			distboxT=numbereditbox(200,<<setformat(5));
+			metricbx=numbereditbox(1,<<setformat(3));
+			dimBx4=numbereditbox(1,<<setformat(3));
+			perBx4=numbereditbox(20,<<setformat(4));
+			metBx4=numbereditbox(1,<<setformat(3));
+			graBx4=numbereditbox(20,<<setformat(4));
+			lmBx4=numbereditbox(20,<<setformat(4));
+			dimBx5=numbereditbox(0.5,<<setformat(5));
+			textbox(""),
+			params=hlistbox(
+				textbox("Output Dim "),
+				dimBx2=numbereditbox(2,<<setformat(3)),
+				textbox(""),
+				textbox("n_neighbors "),
+				perBx2=numbereditbox(15,<<setformat(4)),
+				textbox(""),
+				textbox("n_epochs "),
+				iterBx2=numbereditbox(200,<<setformat(5)),
+				textbox(""),
+				textbox("min_dist "),
+				distbox=numbereditbox(0.1,<<setformat(5))
+			),
+			metricsop=textbox("")
+			//textbox(""),
+			//textbox("Metric inputs are: (1) euclidean, (2) correlation, (3) manhattan, (4) chebyshev, (5) canberra, (6) braycurtis, (7) simple_matching_coefficient, (8) minkowski, (9) hamming, (10) mahalanobis, (11) jaccard, (12) Rao_coefficient, (13) cosine, (14) spearman")
+		)
+		 //DONE added metric textbox
+	),
+	panelbox("Action",
+		buttonbox("Recall", //DONE added cbb code for tspace
+			try(
+				//include("C:\Users\meguan\Desktop\Master\JMPaddins\Embedding\zipped\scripts\lastRun.jsl");
+				include(_addinPath_||"scripts"||_slash_||"lastRun.jsl")
+				,
+				throw("No previous run detected")
+			);
+				cbbCode=Associative Array();
+				cbbCode["t-SNE"]=1;
+				cbbCode["UMAP"]=2;
+				cbbCode["Both"]=3;
+				cbbCode["tspace"]=4;
+				cbbCode["wanderlust"]=5;
+				cbbCode["leiden"]=6;
+				(pb2<<xpath("//ComboBox"))<<set(cbbCode[algrLast[1]],runscript(1));
+				for(i=1,i<=nitems(paraLast),i++,
+					(pb2<<xpath("//NumberEditBox"))[i]<<set(paraLast[i])
+				);
+
+		)
+	))
+	
+	,
+	//page break box(),
+	vlistbox(
+	textbox(""),
+	hlistbox(
+	textbox(""),
+	buttonbox("Run",
+		write2lastRun(pb2,_addinPath_);
+
+		//try(CloseConflictingWindows("output_table"));
+		//try(CloseConflictingWindows("output_table1"));
+		//try(CloseConflictingWindows("output_table2"));
+		//try(close(subsetDt));
+		
+		algr=cbb<<get selected();
+		//try(outPath=trim(outFile<<gettext()));
+		print("Got algr!");
+		try(
+			dim1=dimBx1<<get;
+			per1=perBx1<<get;
+			iter1=iterBx1<<get;
+			dim2=dimBx2<<get;
+			per2=perBx2<<get;
+			iter2=iterBx2<<get;
+			dist=distbox<<get;
+			dim3=dimBx3<<get;
+			per3=perBx3<<get;
+			iter3=iterBx3<<get;
+			distT=distboxT<<get;
+			metri=metricbx<<get;
+			dim4=dimBx4<<get;
+			per4=perBx4<<get;
+			met4=metBx4<<get;
+			gra4=graBx4<<get;
+			lm4=lmBx4<<get;
+			dim5=dimBx5<<get;
+		);
+		try(
+			dim2=dimBx2<<get;
+			per2=perBx2<<get;
+			iter2=iterBx2<<get;
+			dist=distbox<<get;
+		);
+		try(
+			dim3=dimBx3<<get; //DONE added try statement for tspace
+			per3=perBx3<<get;
+			iter3=iterBx3<<get;
+			distT=distboxT<<get;
+			metric=metricbx<<get;
+		);
+		print("Got parameters!");
+		
+		try(predictor=selectedX<<getitems);
+		if(length(predictor)<1,throw("Please specify parameters"));//don't use try, use if instead
+		try(labelY=selectedY<<getitems);
+		//need to be modified, consider multiple labels
+		if(nitems(labelY)>0,
+			labelY1=labelY[1];
+			grphVars=evalinsert("\[X( :Y2 ), Y( :Y1 ), Color( :^labelY1^ ) ]\")
+			,
+			labelY1="";
+			grphVars="\[X( :Y2 ), Y( :Y1 )]\"
+		);
+		
+		try(resOlb<<delete;
+			close(outDT,nosave);
+			Delete Symbols(outDT)
+		);
+		//try(close(outDT);Delete Symbols(outDT));//cause despear?
+		
+		//add a function to perform column selection and svd on inData before send it to R
+		data2R=inDataPrep(inData,predictor,labelY,selectRows << Get Selected);//cause error START // (1)
+		inDataD = getRawR(inData,predictor,labelY,selectRows << Get Selected); // (3)
+		rows = inDataD << subset("Invisible", All rows, columns(:Row number)); // The selected rows 
+		print("Start backend!");
+		//outDT=outputDTs;
+		if(algr=="t-SNE",
+			outDT=talk2R(data2R,labelY,algr,dim1, per1,iter1); // TALKS TO R // (5)
+			InsertInto(predictor, " "); // AK - added additional info to parameters column
+			InsertInto(predictor, "Output Dim: " || Char(dim1) || " "); //HELP try correcting these to dim1, fix titles(output dim, etc) to tsne titles
+			InsertInto(predictor, "Perplexity: " || Char(per1) || " ");
+			InsertInto(predictor, "Max_iter: " || Char(iter1) || " ");
+			outDT << Update( With(rows) ,
+								Add Columns from Update Table (:Row number)); // Adds the row numbers into the dataset after it talked to R
+			outDT << New Column("Parameters", character, values(predictor)); // Turn parameters into a column
+			outDT << New Column("Run_Date", numeric, Format( "m/d/y  h:m", 12 ), values({Today()}));
+			resDT="\[outDT]\";
+			grphName="\["t-SNE"]\";
+			resExpr=expr(
+			{eval(parse(eval(gbx2expr))), //Takes resDT from the R output and graphs it
+			outDT<<New Data Box()})
+			,
+			algr=="UMAP",
+			outDT=talk2R(data2R,labelY,algr, 0,0,0,dim2, per2,iter2, dist); // TALKS TO R (5)
+			outDT << Update( With(rows) ,
+								Add Columns from Update Table (:Row number));
+			InsertInto(predictor, " "); // AK - added additional info to parameters column
+			InsertInto(predictor, "Output Dim: " || Char(dim2) || " ");
+			InsertInto(predictor, "N_Neighbors: " || Char(per2) || " ");
+			InsertInto(predictor, "n_epochs: " || Char(iter2) || " ");
+			InsertInto(predictor, "min_dist: " || Char(dist) || " ");
+			outDT << New Column("Parameters", character, values(predictor));
+			outDT << New Column("Run_Date", numeric, Format( "m/d/y  h:m", 12 ), values({Today()}));
+			resDT="\[outDT]\";
+			grphName="\["UMAP"]\";
+			resExpr=expr(
+			{eval(parse(eval(gbx2expr))),
+			outDT<<New Data Box()})
+			,
+			algr=="tspace", //DONE add tspace
+			outDT=talk2R(data2R,labelY,algr,dim3,per3,iter3,distT,metric);
+			outDT << Update( With(rows),
+								Add Columns from Update Table (:Row number));
+			InsertInto(predictor, " ");
+			InsertInto(predictor, "kNN: " || Char(dim3) || " ");
+			InsertInto(predictor, "Graphs: " || Char(per3) || " ");
+			InsertInto(predictor, "Landmarks: " || Char(iter3) || " ");
+			InsertInto(predictor, "Trajectories: " || Char(distT) || " ");
+			InsertInto(predictor, "metric: " || Char(metri) || " ");
+			outDT << New Column("Parameters", character, values(predictor));
+			outDT << New Column("Run_Date", numeric, Format( "m/d/y  h:m", 12 ), values({Today()}));
+			resDT="\[outDT]\";
+			grphName="\["tSpace"]\";
+			resExpr=expr(
+			{eval(parse(eval(gbx2expr))), 
+			outDT<<New Data Box()})
+			,
+			algr=="wanderlust",
+			outDT=talk2R(data2R,labelY,algr,dim4,per4,met4,gra4,lm4);
+			outDT << Update( With(rows),
+				Add Columns from Update Table (:Row number));
+			InsertInto(predictor, " ");
+			InsertInto(predictor, "S: " || Char(dim4) || " ");
+			InsertInto(predictor, "K: " || Char(per4) || " ");
+			InsertInto(predictor, "Metric: " || Char(met4) || " ");
+			InsertInto(predictor, "Graphs: " || Char(gra4) || " ");
+			InsertInto(predictor, "Landmarks: " || Char(lm4) || " ");
+			outDT << New Column("Parameters", character, values(predictor));
+			outDT << New Column("Run_Date", numeric, Format( "m/d/y  h:m", 12 ), values({Today()}));
+			resDT="\[outDT]\";
+			grphName="\["Wanderlust"]\";
+			resExpr=expr(
+			{eval(parse(eval(gbx2expr))), 
+			outDT<<New Data Box()})
+			,
+			algr=="leiden",
+			outDT=talk2R(data2R,labelY,algr,dim5);
+			outDT << Update( With(rows),
+				Add Columns from Update Table (:Row number));
+			InsertInto(predictor, " ");
+			InsertInto(predictor, "res_param: " || Char(dim5) || " ");
+			outDT << New Column("Parameters", character, values(predictor));
+			outDT << New Column("Run_Date", numeric, Format( "m/d/y  h:m", 12 ), values({Today()}));
+			resDT="\[outDT]\";
+			grphName="\["Leiden"]\";
+			resExpr=expr(
+			{eval(parse(eval(gbx2expr))), 
+			outDT<<New Data Box()})
+			,
+			algr=="Both", //DONE added line algr="Both"
+			outDT=talk2R(data2R,labelY,algr,dim1, per1,iter1, dim2, per2, iter2, dist); // TALKS TO R (5)
+			outDT << Update( With(rows) ,
+								Add Columns from Update Table (:Row number));
+			InsertInto(predictor, " "); // AK - added additional info to parameters column //HELP fix tsne here too
+			InsertInto(predictor, "t-SNE:");
+			InsertInto(predictor, "Output Dim: " || Char(dim1) || " ");
+			InsertInto(predictor, "Perplexity: " || Char(per1) || " ");
+			InsertInto(predictor, "Max_iter" || Char(iter1) || " ");
+			InsertInto(predictor, " ");
+			InsertInto(predictor, "UMAP");
+			InsertInto(predictor, "Output Dim: " || Char(dim2) || " ");
+			InsertInto(predictor, "N_Neighbors: " || Char(per2) || " ");
+			InsertInto(predictor, "n_epochs" || Char(iter2) || " ");
+			InsertInto(predictor, "min_dist: " || Char(dist) || " ");
+			outDT << New Column("Parameters", character, values(predictor));
+			outDT << New Column("Run_Date", numeric, Format( "m/d/y  h:m", 12 ), values({Today()}));
+			resDT="\[outDT[1]]\";
+			grphName="\["t-SNE"]\";
+			gbx2expr1=gbx2expr;
+			resDT="\[outDT[2]]\";
+			grphName="\["UMAP"]\";			
+			gbx2expr2=gbx2expr;
+			resExpr=expr(
+			{eval(parse(eval(gbx2expr1))),
+			eval(parse(eval(gbx2expr2)))
+			})
+		);
+		//add resTab
+		try(
+			outvlb<<getsize;
+			try(resOlb<<delete);
+			outvlb<<append(resOlb=outlinebox("Analysis Result",
+				V Scroll Box(//flexible(1),
+				//vspout=vsplitterbox(
+				vspout=vlistbox(
+				Button Box ( " Reintegrate Data ", eval(parse(eval(reintegratedata))) ), // Add a button box
+				eval(resExpr[1]),
+				eval(resExpr[2])
+				//interface<<Set Window Size(800,700)
+				)
+				)
+				)
+				)
+			,
+			HSBParent<<append(HSB3=hsplitterbox());
+			//olb3<<delete;
+			HSB3<<append(olb3=outlinebox("Results",
+			outvlb=vlistbox(resOlb=outlinebox("Analysis Result",
+				V Scroll Box(//flexible(1),
+				//vspout=vsplitterbox(
+				vspout=vlistbox(
+				Button Box ( " Reintegrate Data ", eval(parse(eval(reintegratedata))) ), // Add a button box
+				eval(resExpr[1]),
+				eval(resExpr[2])
+				//interface<<Set Window Size(800,700)
+				)
+				)
+				)
+				)
+			, 
+			<<outlinecloseorientation( "Vertical" ),
+			<<close(0)
+		))
+		);//end of add resTab
+		//olb1<<close(1);
+		try(qcOlbx<<close(1));
+		try(olb2<<close(1));
+		//interface<<Set Window Size(1100, 800);
+		interface<<Maximize Window( 1 );
+	),
+	textbox(""),
+	buttonbox("Reset",
+		ifClose=newwindow("Reset?",<<modal,
+			vlistbox(
+			textbox("Are you sure you want to reset and delete the results?"),
+			textbox(""),
+			hlistbox(buttonbox("Yes"),buttonbox("No"))
+			)
+		);
+		if(ifClose["Button"]==1,
+			try(colSelector<<clear selection);
+			//try((vlb<<child)<<delete;
+			selectedX<<Set Items();
+			selectedY<<Set Items();
+			try(HSB3<<delete);
+			try(close(subsetDt2,nosave));
+			try(close(mdp,nosave));
+			
+			try(
+				Delete Symbols(selectedSprsCols1);
+				Delete Symbols(selectedSprsCols2);
+				Delete Symbols(selectedSprsCols3);
+				selectedSprs1<<Set Items();
+				selectedSprs2<<Set Items();
+				selectedSprs3<<Set Items();
+			);
+			try(CloseConflictingWindows("subset_dist"));
+			try(CloseConflictingWindows("Missing Data Pattern"));
+			try(CloseConflictingWindows("output_table"));
+			try(CloseConflictingWindows("output_table1"));
+			try(CloseConflictingWindows("output_table2"));
+			try(qcolb<<close(1));
+			//interface<<set window size(350,300);
+			interface<<zoom window;
+			//inFile<<set text("");
+			try(
+			dimBx1<<set(2); //DONE added tspace dims here, reset UMAP defaults
+			perBx1<<set(30);
+			iterBx1<<set(500);
+			dimBx2<<set(2);
+			perBx2<<set(15);
+			iterBx2<<set(200);
+			distbox<<set(0.1);
+			dimBx3<<set(25);
+			perBx3<<set(5);
+			iterBx3<<set(10);
+			distboxT<<set(200);
+			metricbx<<set(1);
+			dimBx4<<set(1);
+			perBx4<<set(20);
+			metBx4<<set(1);
+			graBx4<<set(20);
+			lmBx4<<set(20);
+			dimBx5<<set(0.5));		
+			//outFile<<set text("");
+			cbb<<set(1,runscript(1));
+			//interface<<set window Size(856, 418);
+			);
+			
+		)
+	//)
+	,
+	textbox(""),
+	buttonbox("Cancel",
+		interface<<Close Window;
+		try(
+			try(close(outDT[1],nosave);
+				close(outDT[2],nosave)
+				,
+				try(close(outDT,nosave))
+			);
+			try(close(subsetDt2,nosave));
+			//close(subsetDt)
+		);
+		try(CloseConflictingWindows("subset_dist"));
+		try(CloseConflictingWindows("Missing Data Pattern"));
+		try(CloseConflictingWindows("output_table"));
+		try(CloseConflictingWindows("output_table1"));
+		try(CloseConflictingWindows("output_table2"));
+		namespace("here")<<remove(namespace("here")<<getkeys);
+	)//cancel box
+	)
+	)//v list box of action section
+	)
+	)//model specification outline box
+	)//outline box now
+	)//Model Setup outline box
+	)//parent splitter box
+	)//boarderbox
+	);
+//);
+
+inData=Current Data Table();
+column_list = inData << Get Column Names(string);
+if (!contains(Column_list, "Row Number"), // AK - checks to see if the row number column doesnt exist
+      inData << New Column( "Row Number",numeric, ordinal, << Set Each Value(0)); //if it doesnt exist, add it
+      inData:Row Number<<set selected(1); //select it
+      inData<<move selected columns("To First")<<clear column selection; //and move it to the front
+);
+n = N Rows(inData); // AK- Added the row number to the row number column
+For( i = 1, i <= n, i++,;
+	inData:Row Number[i] = i
+);
+
+if(Is Empty(inData)
+	,
+	pickedFile = Pick File(
+		"Select File",
+		"",
+		{"All Files|jmp;txt;csv;sas7bdat;tsv;dat", "Excel Files|*xls"},
+		1,
+		0,
+		"",
+		""
+	);
+	Try( inData=Open( pickedFile ) );
+);
+
+//substituteinto(exInterface,expr("Output Dim:"),expr("K-Dim:"));
+exInterface;
+//interface<<inval size();
+//interface<< Optimize Display;
+//interface<< Size to Fit;
+//interface<< Zoom Window;
+interface<<Bring Window to Front;
+interface<<onclose(
+	//CloseConflictingWindows("label");
+	try(close(outDT[1],nosave);
+		close(outDT[2],nosave)
+		,
+		try(close(outDT,nosave))
+	);
+	try(colSelector<<clear selection);
+	try(close(subsetDt2,nosave));
+	try(close(mdp,nosave));
+	try(CloseConflictingWindows("subset_dist"));
+	try(CloseConflictingWindows("Missing Data Pattern"));
+	try(CloseConflictingWindows("output_table"));
+	try(CloseConflictingWindows("output_table1"));
+	try(CloseConflictingWindows("output_table2"));
+	//namespace("here")<<remove(namespace("here")<<getkeys);
+);
+interface<<Bring Window to Front;
+//interface<<set window Size(856, 418);
+//interface<<getsize;{525, 392}
+
